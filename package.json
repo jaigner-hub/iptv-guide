@@ -1,7 +1,7 @@
 {
   "name": "iptv-guide",
   "productName": "IPTV Guide",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A TV-guide style player for iptv-org streams",
   "main": "src/main/main.js",
   "author": "Jeff",
