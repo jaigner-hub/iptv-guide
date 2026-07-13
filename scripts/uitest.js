@@ -248,6 +248,73 @@ app.whenReady().then(async () => {
     if (play.readyState > 0) break
   }
 
+  // Sleep timer. The countdown is derived from a wall-clock deadline rather than
+  // counted in ticks — which is exactly what makes this testable: move the page's
+  // clock forward and the timer must behave as if 15 minutes really passed. A
+  // tick-counting implementation would sail straight through this.
+  const sleepTest = await win.webContents.executeJavaScript(`(async () => {
+    const btn = document.querySelector('#btn-sleep')
+    const v = document.querySelector('#video')
+    const wait = ms => new Promise(r => setTimeout(r, ms))
+
+    // "End of this programme" is only offered when we know what's on, so pick a
+    // channel that actually has a live programme rather than whichever one the
+    // playback loop landed on (most channels have no guide data).
+    const liveCh = document.querySelector('#grid-inner .prog.live')?.dataset.ch
+    if (liveCh) {
+      document.querySelector(\`#chancol-inner .chan[data-id="\${liveCh}"]\`)?.click()
+      await wait(1200)
+    }
+    if (document.querySelector('#player').classList.contains('collapsed')) return { skip: true }
+
+    v.volume = 0.8 // a volume the user chose; the fade must hand it back
+    btn.click()                                  // open the menu
+
+    // The menu must be fully on screen. It opens upward from controls that sit at
+    // the bottom of a short panel, and a 7-item menu ran straight off the top of
+    // the window — visible in a screenshot, invisible to every other assertion.
+    const mb = document.querySelector('#sleep-menu').getBoundingClientRect()
+    const onScreen = mb.top >= 0 && mb.left >= 0 &&
+                     mb.bottom <= window.innerHeight && mb.right <= window.innerWidth
+    const menuBox = { top: Math.round(mb.top), bottom: Math.round(mb.bottom),
+                      left: Math.round(mb.left), right: Math.round(mb.right),
+                      vw: window.innerWidth, vh: window.innerHeight }
+
+    const items = [...document.querySelectorAll('#sleep-menu .menu-item')]
+      .map(b => b.querySelector('.mi-label').textContent)
+    const epgOption = items.includes('End of this programme')
+    const epgHint = [...document.querySelectorAll('#sleep-menu .menu-item')]
+      .find(b => b.querySelector('.mi-label').textContent === 'End of this programme')
+      ?.querySelector('.mi-hint').textContent || null
+    const onNow = document.querySelector('#np-name').textContent
+
+    // arm 15 minutes
+    const arm = [...document.querySelectorAll('#sleep-menu .menu-item')]
+      .find(b => b.querySelector('.mi-label').textContent === '15 minutes')
+    arm.click()
+    await wait(700)
+    const armed = { on: btn.classList.contains('on'), label: btn.textContent.trim() }
+
+    // move the page clock to 10 s before the deadline: it must be fading, still playing
+    const realNow = Date.now
+    Date.now = () => realNow() + 14 * 60000 + 50000
+    await wait(900)
+    const fading = { vol: +v.volume.toFixed(3), playing: !document.querySelector('#player').classList.contains('collapsed') }
+
+    // past the deadline: playback stops, volume handed back, chip disarmed
+    Date.now = () => realNow() + 16 * 60000
+    await wait(900)
+    const fired = {
+      collapsed: document.querySelector('#player').classList.contains('collapsed'),
+      vol: +v.volume.toFixed(3),
+      label: btn.textContent.trim(),
+      on: btn.classList.contains('on'),
+      status: document.querySelector('#status').textContent
+    }
+    Date.now = realNow
+    return { epgOption, epgHint, onNow, items, armed, fading, fired, onScreen, menuBox }
+  })()`)
+
   const ok = (c, m) => console.log(`${c ? '  ok  ' : '  FAIL'} ${m}`)
   console.log('\n[renderer]')
   ok(probe.hls, 'hls.js loaded')
@@ -286,6 +353,22 @@ app.whenReady().then(async () => {
   ok(/^http:\/\/127\.0\.0\.1/.test(play.src) || play.src.startsWith('blob:'), `video src via proxy/MSE: ${play.src}`)
   ok(play.readyState > 0 || !!play.err, `video readyState=${play.readyState} ${play.w}x${play.h}`)
   if (play.err) console.log(`      note: ${play.err}`)
+
+  console.log('\n[sleep timer]')
+  if (sleepTest.skip) console.log('  --   nothing playing, skipped')
+  else {
+    ok(/^⏱ 1[45]:\d\d$/.test(sleepTest.armed.label) && sleepTest.armed.on,
+      `arming 15 min shows a live countdown: "${sleepTest.armed.label}"`)
+    ok(sleepTest.fading.vol > 0 && sleepTest.fading.vol < 0.8 && sleepTest.fading.playing,
+      `fades out over the last 20 s instead of cutting (volume 0.8 -> ${sleepTest.fading.vol}, still playing)`)
+    ok(sleepTest.fired.collapsed, 'at the deadline, playback stops')
+    ok(sleepTest.fired.vol === 0.8, `the user's volume is handed back, not left at 0 (${sleepTest.fired.vol})`)
+    ok(!sleepTest.fired.on && sleepTest.fired.label === '⏱ Sleep', 'the timer disarms itself')
+    ok(sleepTest.epgOption, `"End of this programme" offered on a channel with a guide (${sleepTest.onNow}: ${sleepTest.epgHint})`)
+    ok(sleepTest.onScreen, `the menu is fully on screen (top ${sleepTest.menuBox.top}, bottom ${sleepTest.menuBox.bottom} of ${sleepTest.menuBox.vh})`)
+    console.log(`      menu: ${sleepTest.items.join(' · ')}`)
+    console.log(`      status: ${sleepTest.fired.status}`)
+  }
 
   console.log('\n[console errors]')
   if (errors.length) errors.slice(0, 10).forEach(e => console.log('  ! ' + e))

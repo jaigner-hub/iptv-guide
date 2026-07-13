@@ -193,6 +193,35 @@ body.resizing #video { pointer-events: none; }
 .chip.toggle.on { background: var(--accent); border-color: var(--accent); color: #04101f; font-weight: 600; }
 .chip.select { padding: 6px 8px; }
 
+/* Popup menu (sleep timer). Positioned against the *viewport*, not the button's
+   panel: the side panel is short and clips its overflow, so an absolutely
+   positioned menu got cut off at the top of the window. JS flips it above/below
+   the button and clamps it on screen — see positionMenu(). */
+.menu-wrap { position: relative; display: inline-flex; }
+.menu {
+  position: fixed; z-index: 40;
+  min-width: 230px; overflow-y: auto;
+  background: var(--bg-3); border: 1px solid var(--line); border-radius: 10px;
+  padding: 4px; box-shadow: 0 12px 32px rgba(0, 0, 0, .55);
+}
+.menu-item {
+  display: flex; flex-direction: column; gap: 1px; width: 100%; text-align: left;
+  padding: 7px 9px; border: 0; border-radius: 6px; background: none;
+  color: var(--fg); font: inherit; font-size: 13px; cursor: pointer;
+}
+.menu-item:hover { background: var(--accent); color: #04101f; }
+.menu-item:hover .mi-hint { color: #04101f; opacity: .75; }
+.menu-item.danger:hover { background: var(--live); color: #fff; }
+.menu-item.danger:hover .mi-hint { color: #fff; }
+.mi-label { font-weight: 550; }
+.mi-hint {
+  font-size: 11px; color: var(--fg-dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px;
+}
+
+/* counting down: it should read as armed, not as a pressed button */
+#btn-sleep.on { background: var(--fav); border-color: var(--fav); color: #201704; font-variant-numeric: tabular-nums; }
+
 .btn {
   padding: 8px 14px; border-radius: 7px; cursor: pointer;
   background: var(--accent); color: #04101f; border: 0; font-weight: 600; font: inherit;

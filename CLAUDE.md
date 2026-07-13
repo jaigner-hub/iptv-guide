@@ -33,9 +33,15 @@ cmd.exe /c "npx electron scripts/boottest.js"     # cold start; --offline assert
 cmd.exe /c "npx electron scripts/stalltest.js"    # a dead stream must fail over, not hang
 ```
 
-`scripts/shot.js` screenshots the window. **Use it.** The programme-search feature passed all its
-assertions and the screenshot still showed a wall of "No guide data" next to hits captioned with
-*yesterday's* airings — two real bugs no assertion had asked about.
+`scripts/shot.js` screenshots the window. **Use it — every visual feature, every time.** This has now
+paid for itself twice:
+
+- Programme search passed every assertion while the screenshot showed a wall of "No guide data"
+  next to hits captioned with *yesterday's* airings. Two real bugs, neither asserted against.
+- The sleep-timer menu passed every assertion while running clean off the top of the window.
+
+Both were invisible to assertions because nobody thought to ask the question the picture answers
+immediately. Take the screenshot, *look at it*, then write the assertion for what you saw.
 
 When you fix a rendering bug, **revert the fix and confirm the test fails.** A test written after
 the fact that has never seen the bug is not evidence.
@@ -78,3 +84,11 @@ and `require` them at runtime.
 The guide is a virtualised grid: rows are absolutely positioned and DOM nodes are reused across
 renders, keyed by a signature. If you add anything to a row's appearance, **add it to `sigOf`** —
 reusing a row without rebuilding it on a re-sort is what painted two channels on top of each other.
+
+Popups can't be positioned against their container. The player's side panel is short and clips its
+overflow, so an `absolute; bottom:100%` menu ran off the top of the window. `positionMenu()` places
+them in viewport coordinates, flipping above/below and clamping on screen — reuse it.
+
+Timers that must fire on time (the sleep timer) read the wall clock; they never count ticks. The
+window sets `backgroundThrottling: false` because it keeps playing audio while hidden to the tray,
+and Chromium otherwise throttles a hidden window's timers to once a minute.

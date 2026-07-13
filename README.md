@@ -115,6 +115,21 @@ It matches **titles only**. Matching descriptions as well sounded more generous 
 the term was buried in a synopsis. A result whose title has nothing to do with what you typed
 just reads as a broken search.
 
+### Sleep timer
+
+`⏱ Sleep` in the player controls (or <kbd>S</kbd>): 15 min … 2 h, or **End of this programme** —
+the option a plain player can't offer, because we know when the show ends. The chip counts down
+while it's armed, and the last 20 seconds fade the volume out rather than cutting to silence; cancel
+during the fade and your volume comes back exactly where it was.
+
+Two things it has to get right, and a `setTimeout(stop, mins * 60000)` gets neither:
+
+- **It must not drift.** The countdown is derived from a wall-clock deadline and re-read each tick,
+  so a delayed or throttled tick loses nothing.
+- **It must survive the window being hidden.** Closing to the tray while audio plays is the normal
+  way to fall asleep to this — and Chromium throttles timers in a hidden window to once a second,
+  then once a minute. The window runs with `backgroundThrottling: false`.
+
 ### Filling the gaps: scraping from the GUI
 
 Settings → **Fill gaps by scraping**. Pick a site, hit Scrape.
@@ -141,7 +156,7 @@ Working sites: `plex.tv`, `xumo.tv`, `tvguide.com`, `tvpassport.com`, `ontvtonig
 - **Not every stream plays.** ~1,200 are geo-blocked and ~1,850 are part-time ("Not 24/7").
   The player fails over to the next source automatically.
 - Closing the window hides to tray; quit from the tray menu.
-- `/` focuses search, `f` fullscreens, `Esc` closes the player.
+- `/` focuses search, `f` fullscreens, `s` sets a sleep timer, `t` is theater, `Esc` closes the player.
 - The timeline shows 24 h. A search hit beyond it still tells you when it's on, but can't be
   jumped to.
 

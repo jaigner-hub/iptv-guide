@@ -709,6 +709,7 @@ function play(stream) {
 function stop() {
   playToken++ // cancel any in-flight failover for the stream we're abandoning
   clearTimeout(stallTimer)
+  cancelSleep({ silent: true }) // nothing is playing; a countdown to stop it is noise
   failover = []
   if (hls) {
     hls.destroy()
@@ -810,6 +811,187 @@ function toggleFav(id) {
   saveSettings({ favorites: [...state.favorites] })
   if (state.playing) updateFavButton(state.playing)
   applyFilters()
+}
+
+/* ────────────────────────── sleep timer ───────────────────────
+ *
+ * Stop playing after a while, for falling asleep to. Two things this has to get
+ * right that a naive `setTimeout(stop, mins * 60000)` does not:
+ *
+ *   1. It must not drift. The countdown is derived from a wall-clock deadline
+ *      and re-read every tick, so a throttled or delayed tick loses nothing.
+ *      (The window also runs with backgroundThrottling off — see main.js — since
+ *      closing to the tray is the normal way to fall asleep to this.)
+ *   2. It must not cut out mid-sentence. The last 20 seconds fade the volume
+ *      down, so you get a warning rather than sudden silence; cancelling during
+ *      the fade puts the volume back exactly where you had it.
+ *
+ * "End of this programme" is the option a plain player can't offer — we know
+ * when the show ends, so use it.
+ */
+const SLEEP_FADE_MS = 20000
+const sleep = { endsAt: 0, tick: 0, volume: null }
+
+const sleepActive = () => sleep.endsAt > 0
+
+function armSleep(endsAt, label) {
+  cancelSleep({ silent: true })
+  if (endsAt <= Date.now() + 1000) return
+  sleep.endsAt = endsAt
+  sleep.tick = setInterval(sleepTick, 500)
+  sleepTick()
+  setStatus(`Sleep timer set — ${label}`)
+}
+
+function cancelSleep({ silent = false } = {}) {
+  clearInterval(sleep.tick)
+  sleep.tick = 0
+  sleep.endsAt = 0
+  if (sleep.volume !== null) {
+    video.volume = sleep.volume // we were mid-fade; give the user their volume back
+    sleep.volume = null
+  }
+  renderSleepButton()
+  if (!silent) setStatus('Sleep timer off')
+}
+
+function sleepTick() {
+  const left = sleep.endsAt - Date.now()
+
+  if (left <= 0) {
+    cancelSleep({ silent: true }) // also puts the volume back, so the next channel isn't silent
+    stop()
+    setStatus('Sleep timer — stopped playing. Good night.')
+    return
+  }
+
+  // ease the volume down over the final stretch instead of cutting out
+  if (left <= SLEEP_FADE_MS) {
+    if (sleep.volume === null) sleep.volume = video.volume
+    video.volume = Math.max(0, sleep.volume * (left / SLEEP_FADE_MS))
+  } else if (sleep.volume !== null) {
+    video.volume = sleep.volume // deadline was pushed back out of the fade window
+    sleep.volume = null
+  }
+
+  renderSleepButton(left)
+}
+
+const fmtLeft = ms => {
+  const s = Math.ceil(ms / 1000)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  return h ? `${h}:${String(m).padStart(2, '0')}` : `${m}:${String(s % 60).padStart(2, '0')}`
+}
+
+function renderSleepButton(left = sleep.endsAt - Date.now()) {
+  const btn = $('#btn-sleep')
+  const on = sleepActive()
+  btn.classList.toggle('on', on)
+  btn.textContent = on ? `⏱ ${fmtLeft(left)}` : '⏱ Sleep'
+  btn.title = on
+    ? `Playback stops at ${fmtTime(sleep.endsAt)} — click to change or cancel`
+    : 'Stop playing after a while (S)'
+}
+
+/** The programme currently on the channel we're watching, if we know it. */
+function currentProgramme() {
+  if (!state.playing) return null
+  const now = Date.now()
+  return state.epg.get(state.playing.id)?.find(p => p.s <= now && p.e > now) || null
+}
+
+function openSleepMenu() {
+  const menu = $('#sleep-menu')
+  menu.innerHTML = ''
+
+  const item = (label, hint, onclick, { danger = false } = {}) => {
+    const b = el('button', `menu-item${danger ? ' danger' : ''}`)
+    b.append(el('span', 'mi-label', label))
+    if (hint) b.append(el('span', 'mi-hint', hint))
+    b.onclick = () => {
+      closeSleepMenu()
+      onclick()
+    }
+    menu.append(b)
+  }
+
+  if (sleepActive()) {
+    item('Cancel sleep timer', fmtLeft(sleep.endsAt - Date.now()) + ' left', () => cancelSleep(), {
+      danger: true
+    })
+  }
+
+  // the guide-aware option: only offered when we actually know when the show ends
+  const prog = currentProgramme()
+  if (prog && prog.e > Date.now() + 60000) {
+    item('End of this programme', `${prog.t} — ends ${fmtTime(prog.e)}`, () =>
+      armSleep(prog.e, `stops at ${fmtTime(prog.e)}, when "${prog.t}" ends`)
+    )
+  }
+
+  for (const mins of [15, 30, 45, 60, 90, 120]) {
+    const at = Date.now() + mins * 60000
+    item(
+      mins >= 60 && mins % 60 === 0 ? `${mins / 60} hour${mins > 60 ? 's' : ''}` : `${mins} minutes`,
+      `until ${fmtTime(at)}`,
+      () => armSleep(at, `stops at ${fmtTime(at)}`)
+    )
+  }
+
+  menu.classList.remove('hidden')
+  positionMenu(menu, $('#btn-sleep'))
+  document.addEventListener('pointerdown', onDocDown, true)
+  window.addEventListener('resize', closeSleepMenu)
+}
+
+/**
+ * Put `menu` next to `btn` in viewport coordinates.
+ *
+ * The obvious CSS — `position:absolute; bottom:100%` on the button's wrapper —
+ * looked right and wasn't: the controls live at the bottom of a short,
+ * overflow-hidden side panel, so a seven-item menu opening upward was simply cut
+ * off at the top of the window. Prefer above, fall back to below, and if neither
+ * fits, take the roomier side and let the menu scroll.
+ */
+function positionMenu(menu, btn) {
+  const GAP = 6
+  const b = btn.getBoundingClientRect()
+  menu.style.maxHeight = ''
+  const h = menu.offsetHeight
+  const above = b.top - GAP
+  const below = window.innerHeight - b.bottom - GAP
+
+  let top
+  if (h <= above) top = b.top - h - GAP
+  else if (h <= below) top = b.bottom + GAP
+  else if (above >= below) {
+    menu.style.maxHeight = `${above - GAP}px`
+    top = GAP
+  } else {
+    menu.style.maxHeight = `${below - GAP}px`
+    top = b.bottom + GAP
+  }
+
+  const w = menu.offsetWidth
+  const left = Math.max(GAP, Math.min(b.left, window.innerWidth - w - GAP))
+  menu.style.top = `${Math.max(GAP, top)}px`
+  menu.style.left = `${left}px`
+}
+
+function closeSleepMenu() {
+  $('#sleep-menu').classList.add('hidden')
+  document.removeEventListener('pointerdown', onDocDown, true)
+  window.removeEventListener('resize', closeSleepMenu)
+}
+
+function onDocDown(e) {
+  if (!e.target.closest('.menu-wrap')) closeSleepMenu()
+}
+
+$('#btn-sleep').onclick = () => {
+  if ($('#sleep-menu').classList.contains('hidden')) openSleepMenu()
+  else closeSleepMenu()
 }
 
 /* ─────────────────────────── settings ─────────────────────── */
@@ -945,13 +1127,15 @@ document.addEventListener('keydown', e => {
   }
   if (e.key === 'Escape') {
     // unwind one layer at a time, most-nested first
-    if (!$('#modal').classList.contains('hidden')) $('#modal').classList.add('hidden')
+    if (!$('#sleep-menu').classList.contains('hidden')) closeSleepMenu()
+    else if (!$('#modal').classList.contains('hidden')) $('#modal').classList.add('hidden')
     else if (document.fullscreenElement) document.exitFullscreen()
     else if (state.settings.theater) toggleTheater(false)
     else stop()
   }
   if (e.key === 'f' && state.playing) goFullscreen()
   if (e.key === 't' && state.playing) toggleTheater()
+  if (e.key === 's' && state.playing) $('#btn-sleep').click()
   if (e.key === ' ' && state.playing) {
     e.preventDefault()
     video.paused ? video.play().catch(() => {}) : video.pause()

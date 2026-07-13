@@ -123,7 +123,13 @@ function createWindow() {
       preload: path.join(__dirname, '..', 'preload', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      // Closing the window hides it to the tray while audio keeps playing, and
+      // Chromium throttles timers in a hidden window to once a second, then once
+      // a minute. That is precisely when the sleep timer has to be right, so the
+      // countdown reads the clock rather than counting ticks — and throttling is
+      // off so it fires on time instead of up to a minute late.
+      backgroundThrottling: false
     }
   })
 
