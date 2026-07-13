@@ -1,0 +1,93 @@
+{
+  "name": "iptv-guide",
+  "productName": "IPTV Guide",
+  "version": "0.1.0",
+  "description": "A TV-guide style player for iptv-org streams",
+  "main": "src/main/main.js",
+  "author": "Jeff",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "vendor": "node scripts/vendor.js",
+    "icons": "python3 scripts/make-icon.py",
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win",
+    "dist:mac": "npm run vendor && electron-builder --mac",
+    "dist:linux": "npm run vendor && electron-builder --linux",
+    "postinstall": "node scripts/vendor.js"
+  },
+  "dependencies": {
+    "@ntlab/awswaf": "^1.0.1",
+    "@ntlab/sfetch": "^1.5.0",
+    "axios": "^1.7.9",
+    "cheerio": "^1.2.0",
+    "dayjs": "^1.11.13",
+    "epg-grabber": "^0.48.0",
+    "epg-parser": "^0.5.0",
+    "lodash.uniqby": "^4.7.0"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "hls.js": "^1.5.17"
+  },
+  "build": {
+    "appId": "com.jeff.iptvguide",
+    "productName": "IPTV Guide",
+    "files": [
+      "src/**/*",
+      "!src/**/*.map",
+      "vendor/**/*",
+      "build/icon.*"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/**",
+      "vendor/**"
+    ],
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "IPTV Guide"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.entertainment",
+      "icon": "build/icon.icns"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "AudioVideo",
+      "icon": "build/icon.png"
+    }
+  }
+}

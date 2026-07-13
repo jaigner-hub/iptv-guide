@@ -1,0 +1,15 @@
+node_modules/
+
+# build output — the ZIP alone is 113 MB
+release/
+dist/
+
+# test fixtures: real catalog + guide caches, regenerated on demand
+.selftest/
+.selftest-fresh/
+
+# copied out of node_modules by scripts/vendor.js (postinstall)
+src/renderer/vendor/
+
+*.log
+.DS_Store

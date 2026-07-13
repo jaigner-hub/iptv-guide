@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!-- Everything is same-origin (our localhost server) except media, which the
+         proxy re-serves; logos are proxied too. No remote script may run here. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' blob:;"
+    />
+    <title>IPTV Guide</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- ── player ─────────────────────────────────────────────── -->
+      <section id="player" class="player collapsed">
+        <div class="player-video" id="player-video">
+          <video id="video" playsinline></video>
+          <div id="player-spinner" class="spinner hidden"></div>
+          <div id="player-error" class="player-error hidden"></div>
+          <button id="btn-side" class="edge-btn" title="Show/hide info panel">›</button>
+        </div>
+        <div class="player-side">
+          <div class="player-head">
+            <img id="np-logo" class="np-logo" alt="" />
+            <div class="np-text">
+              <div id="np-name" class="np-name">Nothing playing</div>
+              <div id="np-meta" class="np-meta">Pick a channel from the guide below</div>
+            </div>
+            <button id="btn-close-player" class="icon-btn" title="Close player (Esc)">✕</button>
+          </div>
+          <div id="np-now" class="np-now"></div>
+          <div class="player-controls">
+            <button id="btn-fav" class="chip" title="Favourite">☆ Favourite</button>
+            <button id="btn-theater" class="chip toggle" title="Hide the guide (T)">▭ Theater</button>
+            <button id="btn-fullscreen" class="chip" title="Fullscreen (F)">⛶ Fullscreen</button>
+            <select id="stream-picker" class="chip select" title="Stream source"></select>
+          </div>
+        </div>
+      </section>
+
+      <!-- drag to resize the player; double-click to reset -->
+      <div id="splitter" class="splitter" title="Drag to resize · double-click to reset"></div>
+
+      <!-- ── toolbar ────────────────────────────────────────────── -->
+      <header class="toolbar">
+        <div class="brand">
+          <span class="dot"></span> IPTV&nbsp;Guide
+        </div>
+        <input id="search" class="search" type="search" placeholder="Search channels &amp; what's on…" autocomplete="off" />
+        <select id="f-country" class="select"></select>
+        <select id="f-category" class="select"></select>
+        <button id="f-fav" class="chip toggle" title="Show only favourites">☆ Favourites</button>
+        <button id="f-epg" class="chip toggle" title="Only channels with guide data">Guide only</button>
+        <span class="spacer"></span>
+        <button id="btn-now" class="chip">Now</button>
+        <button id="btn-settings" class="chip">⚙</button>
+      </header>
+
+      <!-- ── guide ──────────────────────────────────────────────── -->
+      <section class="guide">
+        <div class="guide-corner">
+          <span id="chan-count">—</span>
+        </div>
+        <div id="timebar" class="timebar">
+          <div id="timebar-inner" class="timebar-inner"></div>
+        </div>
+        <div id="chancol" class="chancol">
+          <div id="chancol-inner" class="chancol-inner"></div>
+        </div>
+        <div id="grid" class="grid">
+          <div id="grid-inner" class="grid-inner">
+            <div id="nowline" class="nowline"></div>
+          </div>
+        </div>
+      </section>
+
+      <footer class="statusbar">
+        <span id="status">Starting…</span>
+        <div id="progress" class="progress hidden"><div class="bar"></div></div>
+      </footer>
+    </div>
+
+    <!-- shown only if the catalog download fails; startup is never silent -->
+    <div id="startup" class="startup hidden">
+      <div class="startup-box">
+        <h2>Couldn't reach the channel catalog</h2>
+        <p id="startup-msg" class="startup-msg"></p>
+        <p class="hint">
+          The app downloads its channel list from iptv-org on first run. Check your connection —
+          a proxy, VPN or firewall may be blocking it.
+        </p>
+        <button id="startup-retry" class="btn">Try again</button>
+      </div>
+    </div>
+
+    <!-- ── settings modal ───────────────────────────────────────── -->
+    <div id="modal" class="modal hidden">
+      <div class="modal-box">
+        <div class="modal-head">
+          <h2>Settings &amp; guide data</h2>
+          <button id="btn-close-modal" class="icon-btn">✕</button>
+        </div>
+
+        <div class="modal-body">
+          <h3>Guide coverage</h3>
+          <p class="hint">
+            iptv-org publishes no guide feed of its own, so the guide is assembled from public
+            XMLTV mirrors. Channels with no match show <em>No guide data</em> rather than a guess.
+          </p>
+          <div id="epg-stats" class="stats"></div>
+          <div id="epg-progress-text" class="progress-text hidden"></div>
+          <div id="epg-progress" class="progress wide hidden"><div class="bar"></div></div>
+          <button id="btn-refresh-epg" class="btn">Refresh from mirrors</button>
+
+          <h3>Fill gaps by scraping</h3>
+          <p class="hint">
+            Scrapes a site directly for channels that still have no guide. Only your channels are
+            requested, so this takes seconds, not hours.
+          </p>
+          <div id="sites" class="sites"></div>
+          <pre id="scrape-log" class="log hidden"></pre>
+
+          <h3>Channels</h3>
+          <label class="row">
+            <input type="checkbox" id="s-scope" />
+            <span>Show all countries &amp; languages (default: US&nbsp;+&nbsp;English only)</span>
+          </label>
+          <label class="row">
+            <input type="checkbox" id="s-nsfw" />
+            <span>Hide NSFW channels</span>
+          </label>
+
+          <p class="hint muted" id="about"></p>
+        </div>
+      </div>
+    </div>
+
+    <script src="vendor/hls.min.js"></script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
