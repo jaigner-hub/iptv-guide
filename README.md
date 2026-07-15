@@ -25,10 +25,12 @@ The app code is platform-neutral — there are no native dependencies — so onl
 OS-specific. Linux: `npm run dist:linux`.
 
 **macOS without a Mac.** Building a `.dmg` needs macOS tooling, but you don't need to own a Mac:
-the **Build macOS** GitHub Action (`.github/workflows/build-mac.yml`) builds a universal `.dmg` +
-`.zip` on a GitHub-hosted Mac. It's **manual only** — Actions tab → *Build macOS* → *Run workflow* —
-so it never spends runner minutes on its own. Leave the input blank to just download the artifact,
-or pass a release tag (e.g. `v0.1.1`) to attach the build to that release.
+the **Build macOS** GitHub Action (`.github/workflows/build-mac.yml`) builds **Intel (x64) and Apple
+Silicon (arm64)** `.dmg` + `.zip` on a GitHub-hosted Mac. It's **manual only** — Actions tab →
+*Build macOS* → *Run workflow* — so it never spends runner minutes on its own. Leave the input blank
+to just download the artifacts, or pass a release tag (e.g. `v0.1.1`) to attach the build to that
+release. (Not a single *universal* binary: `@electron/universal`'s asar merge chokes on our large
+`asarUnpack` list — "pattern is too long" — so we ship one download per architecture instead.)
 
 The Mac build is **unsigned** (no Apple Developer certificate). It launches, but Gatekeeper
 quarantines anything downloaded, so first-run is right-click → **Open**, or:
