@@ -1,0 +1,70 @@
+# Builds the macOS app on a GitHub-hosted Mac, so no physical Mac is needed.
+#
+# Manual trigger only — it never runs on push or tag. Start it from the Actions
+# tab ("Build macOS" -> Run workflow), picking the branch or tag to build from.
+# macOS runner minutes are billed at 10x on private repos, which is the whole
+# reason this isn't automatic.
+#
+# The build is UNSIGNED (no Apple Developer certificate). It is ad-hoc signed so
+# it launches, but Gatekeeper will still quarantine it on download — users
+# right-click -> Open the first time, or run:
+#   xattr -dr com.apple.quarantine "/Applications/IPTV Guide.app"
+name: Build macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to attach the build to (e.g. v0.1.1). Leave blank to just get a downloadable artifact."
+        required: false
+        default: ""
+
+# needed only for the optional "attach to release" step
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # postinstall (scripts/vendor.js) copies hls.js next to the renderer
+      - name: Install dependencies
+        run: npm ci
+
+      # Universal so one download runs on both Intel and Apple Silicon. Unsigned:
+      # CSC_IDENTITY_AUTO_DISCOVERY=false stops electron-builder hunting for a real
+      # certificate; it falls back to ad-hoc signing, which arm64 apps require to
+      # start at all. --publish never: this job decides what to upload, not builder.
+      - name: Build (universal, unsigned)
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npx electron-builder --mac dmg zip --universal --publish never
+
+      - name: Collect artifacts
+        run: |
+          mkdir -p out
+          cp release/*.dmg release/*.zip out/ 2>/dev/null || true
+          echo "Built:"
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: out/*
+          if-no-files-found: error
+
+      # Only when a tag was supplied. The release must already exist (cut it with
+      # `gh release create` / your normal flow first); --clobber replaces a
+      # re-uploaded file of the same name.
+      - name: Attach to release
+        if: ${{ inputs.release_tag != '' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" out/* --clobber

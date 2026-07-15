@@ -21,8 +21,19 @@ The build is **unsigned**, so Windows SmartScreen shows "Windows protected your 
 Run button behind a *More info* link. The ZIP sidesteps that — unzip and run. `release/READ-ME-FIRST.txt`
 is written for whoever you hand the build to.
 
-macOS / Linux builds: `npm run dist:mac` (must be run **on** a Mac) / `npm run dist:linux`.
-The app code is platform-neutral — there are no native dependencies.
+The app code is platform-neutral — there are no native dependencies — so only *packaging* is
+OS-specific. Linux: `npm run dist:linux`.
+
+**macOS without a Mac.** Building a `.dmg` needs macOS tooling, but you don't need to own a Mac:
+the **Build macOS** GitHub Action (`.github/workflows/build-mac.yml`) builds a universal `.dmg` +
+`.zip` on a GitHub-hosted Mac. It's **manual only** — Actions tab → *Build macOS* → *Run workflow* —
+so it never spends runner minutes on its own. Leave the input blank to just download the artifact,
+or pass a release tag (e.g. `v0.1.1`) to attach the build to that release.
+
+The Mac build is **unsigned** (no Apple Developer certificate). It launches, but Gatekeeper
+quarantines anything downloaded, so first-run is right-click → **Open**, or:
+`xattr -dr com.apple.quarantine "/Applications/IPTV Guide.app"`. This is macOS's equivalent of the
+Windows SmartScreen prompt, and a $99/yr Apple Developer account + notarization is what removes it.
 
 ## Check it works
 
