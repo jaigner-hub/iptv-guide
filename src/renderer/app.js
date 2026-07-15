@@ -641,6 +641,53 @@ const STALL_TIMEOUT_MS = 14000
 let stallTimer = 0
 let playToken = 0
 
+// The above guards the *initial* load only (it is cleared once onplaying fires).
+// A source that plays fine and then dies mid-broadcast — the common iptv-org
+// case — leaves hls.js's buffer to drain with no fatal error, so the picture
+// freezes and nothing recovers. This watchdog watches playback actually
+// progress (wall clock vs currentTime, never a tick count — a hidden window's
+// timers are throttled and backgroundThrottling is off for audio, so a stall
+// must be measured against the clock). On a freeze it first tries to resume in
+// place, then fails over to the channel's next source.
+const WATCHDOG_TICK_MS = 2000
+const STALL_RECOVER_MS = 6000 // freeze this long → recover in place; again → fail over
+let watchdog = 0
+let progressTime = 0 // last observed video.currentTime
+let progressAt = 0 // wall-clock ms when currentTime last advanced
+let recoverAt = 0 // wall-clock ms of the in-place recovery attempt, 0 if none pending
+
+function watchTick(token, onFail) {
+  // play()/stop() already cleared us on any stream change; just bail defensively.
+  if (token !== playToken) return
+  const now = Date.now()
+  // A user pause, a seek, or a genuine end is not a stall.
+  if (video.paused || video.seeking || video.ended) {
+    progressAt = now
+    recoverAt = 0
+    return
+  }
+  if (video.currentTime > progressTime + 0.25) {
+    progressTime = video.currentTime
+    progressAt = now
+    recoverAt = 0 // playing again — a prior recovery worked
+    return
+  }
+  // currentTime has not advanced. A live stream drops the odd segment, so give
+  // it STALL_RECOVER_MS before doing anything, then nudge hls.js to reconnect.
+  if (!recoverAt) {
+    if (now - progressAt >= STALL_RECOVER_MS && hls) {
+      recoverAt = now
+      setStatus(`${state.playing?.name || ''}: stream stalled — reconnecting…`)
+      $('#player-spinner').classList.remove('hidden')
+      hls.startLoad()
+    }
+    return
+  }
+  // A reconnect was already attempted and it is still frozen — the source is
+  // dead. Switch to the next one exactly as an initial-load stall would.
+  if (now - recoverAt >= STALL_RECOVER_MS) onFail('stalled mid-stream')
+}
+
 function play(stream) {
   if (!stream) return
   const err = $('#player-error')
@@ -652,12 +699,14 @@ function play(stream) {
     hls = null
   }
   clearTimeout(stallTimer)
+  clearInterval(watchdog)
   const token = ++playToken // ignore callbacks from a stream we've moved on from
   video.volume = state.settings.volume ?? 1
 
   const onFail = reason => {
     if (token !== playToken) return
     clearTimeout(stallTimer)
+    clearInterval(watchdog)
     $('#player-spinner').classList.add('hidden')
     const next = failover.shift()
     if (next) {
@@ -703,12 +752,19 @@ function play(stream) {
     $('#player-spinner').classList.add('hidden')
     err.classList.add('hidden')
     setStatus(`Playing ${state.playing?.name || ''}`)
+    // Arm (or re-arm, after a recovery) the in-playback stall watchdog.
+    progressTime = video.currentTime
+    progressAt = Date.now()
+    recoverAt = 0
+    clearInterval(watchdog)
+    watchdog = setInterval(() => watchTick(token, onFail), WATCHDOG_TICK_MS)
   }
 }
 
 function stop() {
   playToken++ // cancel any in-flight failover for the stream we're abandoning
   clearTimeout(stallTimer)
+  clearInterval(watchdog)
   cancelSleep({ silent: true }) // nothing is playing; a countdown to stop it is noise
   failover = []
   if (hls) {

@@ -42,6 +42,7 @@ cmd.exe /c "node scripts/selftest.js"             # catalog -> server -> real st
 cmd.exe /c "npx electron scripts/uitest.js"       # real UI: guide renders, row reuse, search, playback
 cmd.exe /c "npx electron scripts/boottest.js"     # cold start; --offline asserts the failure is *shown*
 cmd.exe /c "npx electron scripts/stalltest.js"    # a dead stream must fail over, not hang
+cmd.exe /c "npx electron scripts/midstalltest.js" # a stream that dies MID-play must recover/fail over (needs ffmpeg)
 ```
 
 `scripts/shot.js` screenshots the window. **Use it — every visual feature, every time.** This has now
