@@ -4,6 +4,7 @@ const path = require('node:path')
 const fs = require('node:fs')
 
 const { Store, Settings } = require('./store')
+const { Health } = require('./health')
 const { Catalog } = require('./catalog')
 const { Epg } = require('./epg')
 const { Scraper } = require('./scraper')
@@ -26,8 +27,13 @@ const settings = new Settings(path.join(userData, 'settings.json'), {
   favorites: [],
   lastChannel: null,
   volume: 1,
-  hideNsfw: true
+  muted: false,
+  hideNsfw: true,
+  hideDead: false
 })
+// Failures dedupe against this, so a channel needs to fail across two separate
+// runs before it counts as dead — see health.js.
+const health = new Health(path.join(userData, 'health.json'), require('node:crypto').randomUUID())
 
 const catalog = new Catalog(store)
 const epg = new Epg(store, catalog)
@@ -57,6 +63,7 @@ async function startServer() {
     catalog,
     epg,
     settings,
+    health,
     scraper,
     rendererDir,
     onStatus: status,

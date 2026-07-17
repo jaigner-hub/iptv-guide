@@ -128,6 +128,50 @@ It matches **titles only**. Matching descriptions as well sounded more generous 
 the term was buried in a synopsis. A result whose title has nothing to do with what you typed
 just reads as a broken search.
 
+### Hiding channels that have never worked
+
+About 1 in 4 iptv-org streams are geo-blocked or only broadcast part-time, and a channel whose
+every source is dead looks exactly like a working one until you click it and sit through the
+failover. The player already knows how that turned out — it has to, to fail over at all — so it
+records the verdict, and **Hide dead** in the toolbar filters on it.
+
+The whole difficulty is not hiding channels that actually work. Two rules do that:
+
+- **A success is permanent.** "It works and it's having a bad evening" is not "this has never
+  played", and only the second is worth hiding. Once a channel has delivered a frame it can
+  never be marked dead, however badly it behaves afterwards.
+- **A failure counts once per session.** One bad network evening would otherwise bury every
+  channel you touched during it. It takes two separate runs of the app, both ending with every
+  source exhausted, before anything is hidden.
+
+Two smaller ones: a failure only counts if the player worked down the channel's *own* source
+list — a source you picked by hand failing says nothing about the ones it skipped — and a
+favourite is never hidden, because that's an explicit "I want this".
+
+Records are keyed by channel id (`10Bold.au`), never by stream id. A sid is `channelId|index`
+where the index is assigned *after* sorting, and the catalog is re-fetched every 24 h, so sids
+silently re-point at different streams; channel ids are stable. They live in `health.json`
+rather than `settings.json`, which is meant to stay small enough to edit by hand. **Forget
+what's dead** in settings clears them.
+
+### Volume, and why the fade must not touch it
+
+Mute button + slider in the player controls, <kbd>M</kbd> to mute, <kbd>↑</kbd>/<kbd>↓</kbd> by 5%.
+The level is persisted and restored on the next launch.
+
+The interesting part is the interaction with the sleep timer. `volumechange` persists the volume,
+and the sleep fade *changes the volume 40 times over its last 20 seconds* — so the fade was
+writing its own animation frames to disk as if they were a preference. `saveSettings` POSTs are
+independent and unordered, so a straggler fade write landed after `cancelSleep`'s restore and won.
+The app then booted at **0.83% volume** — and since there was no volume control at the time, there
+was no way to fix it from the UI.
+
+So: **the fade never persists.** `sleep.volume` is non-null only during a fade, and the listener
+bails when it is. `volumechange` is queued as a task rather than fired synchronously, so by the time
+the handler runs `cancelSleep` has already cleared `sleep.volume` — the restored value still gets
+saved. The regression test asserts on the *persisted* value mid-fade, not on `video.volume`;
+asserting on the element is what let this ship, because the element was always correct.
+
 ### Sleep timer
 
 `⏱ Sleep` in the player controls (or <kbd>S</kbd>): 15 min … 2 h, or **End of this programme** —

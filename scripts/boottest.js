@@ -116,4 +116,9 @@ app.whenReady().then(async () => {
   server.close()
   fs.rmSync(dir, { recursive: true, force: true })
   app.exit(0)
+}).catch(err => {
+  // A throw inside app.whenReady().then() is an unhandled rejection: Electron
+  // stays alive with an empty log, which reads exactly like a slow test. Fail loudly.
+  console.error(`\nCRASHED: ${err?.stack || err}`)
+  app.exit(1)
 })

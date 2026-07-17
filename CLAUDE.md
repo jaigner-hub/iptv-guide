@@ -34,8 +34,8 @@ workflow only appears in the Actions UI once it's on the default branch — push
 
 ## Test before you claim
 
-Every real bug in this project was found by running the thing, not by reading it. There are four
-suites; run all of them after touching main or renderer:
+Every real bug in this project was found by running the thing, not by reading it. Run all of
+them after touching main or renderer:
 
 ```sh
 cmd.exe /c "node scripts/selftest.js"             # catalog -> server -> real stream via the proxy
@@ -43,7 +43,13 @@ cmd.exe /c "npx electron scripts/uitest.js"       # real UI: guide renders, row 
 cmd.exe /c "npx electron scripts/boottest.js"     # cold start; --offline asserts the failure is *shown*
 cmd.exe /c "npx electron scripts/stalltest.js"    # a dead stream must fail over, not hang
 cmd.exe /c "npx electron scripts/midstalltest.js" # a stream that dies MID-play must recover/fail over (needs ffmpeg)
+cmd.exe /c "npx electron scripts/healthtest.js"  # an all-dead channel is recorded, then hidden by "Hide dead"
 ```
+
+An Electron test that throws inside `app.whenReady().then(...)` does **not** fail — the rejection
+is unhandled, the app never exits, and you get an empty log that looks exactly like a slow test.
+Every one of these ends in a `.catch` that logs and calls `app.exit(1)`; keep it that way. For the
+same reason, don't pipe a run through `tail` — it buffers to EOF and you go blind while it hangs.
 
 `scripts/shot.js` screenshots the window. **Use it — every visual feature, every time.** This has now
 paid for itself twice:
@@ -104,3 +110,15 @@ them in viewport coordinates, flipping above/below and clamping on screen — re
 Timers that must fire on time (the sleep timer) read the wall clock; they never count ticks. The
 window sets `backgroundThrottling: false` because it keeps playing audio while hidden to the tray,
 and Chromium otherwise throttles a hidden window's timers to once a minute.
+
+**An animation is not a preference.** `volumechange` persists the volume, and the sleep fade drives
+the volume down ~40 times on its way out. Those writes raced `cancelSleep`'s restore and one landed
+last, so the app booted at 0.83%. The listener now bails while `sleep.volume !== null`. Anything
+that animates a persisted value has this bug waiting in it — and note `saveSettings` POSTs are
+independent `fetch`es with **no ordering guarantee**, so "the last write wins" is not something you
+can rely on to fix it.
+
+**Assert on what's persisted, not on the element.** The sleep-timer test checked `video.volume` and
+passed for as long as the bug existed, because the element was always right — it was `settings.json`
+that was wrong, and only the *next launch* read it. If a value survives a restart, the test has to
+read it back the way the next launch would.

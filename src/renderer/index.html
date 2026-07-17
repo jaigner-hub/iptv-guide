@@ -43,6 +43,12 @@
               <div id="sleep-menu" class="menu hidden"></div>
             </div>
             <select id="stream-picker" class="chip select" title="Stream source"></select>
+            <div class="vol">
+              <button id="btn-mute" class="chip" title="Mute (M)">🔊</button>
+              <input id="vol" class="vol-slider" type="range" min="0" max="100" step="1" value="100"
+                     title="Volume (↑/↓)" aria-label="Volume" />
+              <span id="vol-pct" class="vol-pct">100%</span>
+            </div>
           </div>
         </div>
       </section>
@@ -60,6 +66,7 @@
         <select id="f-category" class="select"></select>
         <button id="f-fav" class="chip toggle" title="Show only favourites">☆ Favourites</button>
         <button id="f-epg" class="chip toggle" title="Only channels with guide data">Guide only</button>
+        <button id="f-dead" class="chip toggle" title="Hide channels that have never played on any source">Hide dead</button>
         <span class="spacer"></span>
         <button id="btn-now" class="chip">Now</button>
         <button id="btn-settings" class="chip">⚙</button>
@@ -138,6 +145,14 @@
             <input type="checkbox" id="s-nsfw" />
             <span>Hide NSFW channels</span>
           </label>
+
+          <h3>Channel health</h3>
+          <p class="hint">
+            A channel counts as dead once it has failed on every source across two separate
+            sessions, having never played. Anything that has played once is never hidden, however
+            badly it behaves later. <span id="health-count"></span>
+          </p>
+          <button id="btn-reset-health" class="btn">Forget what's dead</button>
 
           <p class="hint muted" id="about"></p>
         </div>

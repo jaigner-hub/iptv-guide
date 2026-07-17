@@ -26,10 +26,15 @@ const b64u = {
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36'
 
+// Tests that don't care about channel health leave it out rather than writing
+// records into .selftest just by failing a stream over.
+const NO_HEALTH = { ok: () => {}, fail: () => {}, deadIds: () => [], reset: () => {} }
+
 function createServer({
   catalog,
   epg,
   settings,
+  health = NO_HEALTH,
   scraper,
   rendererDir,
   onStatus,
@@ -232,7 +237,9 @@ function createServer({
           epg: epg.stats(),
           // every channel that has a guide, not just the ones the renderer has
           // lazily fetched — the "Guide only" filter must see all of them
-          epgIds: epg.ids()
+          epgIds: epg.ids(),
+          // likewise: channels that have never tuned, for the "Hide dead" filter
+          dead: health.deadIds()
         })
       }
 
@@ -259,6 +266,16 @@ function createServer({
       if (p === '/api/settings' && req.method === 'POST') {
         const body = await readBody(req)
         return sendJson(res, settings.set(JSON.parse(body || '{}')))
+      }
+
+      // The renderer reports what it saw; the session-dedupe and the "a success
+      // is permanent" rule live here, in one place — see health.js.
+      const mHealth = /^\/api\/health\/(ok|fail|reset)$/.exec(p)
+      if (mHealth && req.method === 'POST') {
+        const kind = mHealth[1]
+        if (kind === 'reset') health.reset()
+        else health[kind](JSON.parse((await readBody(req)) || '{}').id)
+        return sendJson(res, { dead: health.deadIds() })
       }
 
       if (p === '/api/epg/refresh' && req.method === 'POST') {

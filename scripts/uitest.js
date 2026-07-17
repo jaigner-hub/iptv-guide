@@ -299,7 +299,14 @@ app.whenReady().then(async () => {
     const realNow = Date.now
     Date.now = () => realNow() + 14 * 60000 + 50000
     await wait(900)
+    const savedVol = async () => (await (await fetch('/api/bootstrap')).json()).settings.volume
     const fading = { vol: +v.volume.toFixed(3), playing: !document.querySelector('#player').classList.contains('collapsed') }
+    // The value that would be restored next launch. The fade is an animation, not
+    // a preference: it must not be written. It was, and a straggler POST landed
+    // after the restore and won — the app booted at 0.83% with no volume control
+    // to fix it with.
+    await wait(400)
+    fading.saved = await savedVol()
 
     // past the deadline: playback stops, volume handed back, chip disarmed
     Date.now = () => realNow() + 16 * 60000
@@ -312,6 +319,8 @@ app.whenReady().then(async () => {
       status: document.querySelector('#status').textContent
     }
     Date.now = realNow
+    await wait(500) // let the restore's POST land before reading it back
+    fired.saved = await savedVol()
     return { epgOption, epgHint, onNow, items, armed, fading, fired, onScreen, menuBox }
   })()`)
 
@@ -363,6 +372,12 @@ app.whenReady().then(async () => {
       `fades out over the last 20 s instead of cutting (volume 0.8 -> ${sleepTest.fading.vol}, still playing)`)
     ok(sleepTest.fired.collapsed, 'at the deadline, playback stops')
     ok(sleepTest.fired.vol === 0.8, `the user's volume is handed back, not left at 0 (${sleepTest.fired.vol})`)
+    // Both of these are about the *persisted* value, which is what the next launch
+    // reads. Asserting only on video.volume is how the app came to boot at 0.83%.
+    ok(sleepTest.fading.saved === 0.8,
+      `mid-fade, the saved volume is still the user's, not the fade's (saved ${sleepTest.fading.saved} while playing at ${sleepTest.fading.vol})`)
+    ok(sleepTest.fired.saved === 0.8,
+      `after the timer fires, the saved volume is the user's (${sleepTest.fired.saved})`)
     ok(!sleepTest.fired.on && sleepTest.fired.label === '⏱ Sleep', 'the timer disarms itself')
     ok(sleepTest.epgOption, `"End of this programme" offered on a channel with a guide (${sleepTest.onNow}: ${sleepTest.epgHint})`)
     ok(sleepTest.onScreen, `the menu is fully on screen (top ${sleepTest.menuBox.top}, bottom ${sleepTest.menuBox.bottom} of ${sleepTest.menuBox.vh})`)
@@ -376,4 +391,9 @@ app.whenReady().then(async () => {
 
   server.close()
   app.exit(errors.length ? 1 : 0)
+}).catch(err => {
+  // A throw inside app.whenReady().then() is an unhandled rejection: Electron
+  // stays alive with an empty log, which reads exactly like a slow test. Fail loudly.
+  console.error(`\nCRASHED: ${err?.stack || err}`)
+  app.exit(1)
 })

@@ -20,6 +20,7 @@ const state = {
   favorites: new Set(),
   epg: new Map(), // channelId -> programmes[] | null (null = fetched, none)
   epgIds: new Set(), // every channel the server holds a guide for
+  dead: new Set(), // channels that have never tuned on any source
   progHits: new Map(), // channelId -> {t,s,e,live} for the current search term
   pending: new Set(),
   playing: null,
@@ -128,6 +129,11 @@ async function boot() {
   state.settings = data.settings
   state.favorites = new Set(data.settings.favorites || [])
   state.epgIds = new Set(data.epgIds || [])
+  state.dead = new Set(data.dead || [])
+
+  video.volume = state.settings.volume ?? 1
+  video.muted = !!state.settings.muted
+  renderVolume() // the control must show the real level before anything plays
 
   buildFilters()
   buildTimebar()
@@ -168,26 +174,26 @@ function buildFilters() {
 
   $('#f-fav').classList.toggle('on', !!state.settings.favOnly)
   $('#f-epg').classList.toggle('on', !!state.settings.epgOnly)
+  $('#f-dead').classList.toggle('on', !!state.settings.hideDead)
 
   const rerun = () => {
     saveSettings({
       country: fc.value,
       category: fk.value,
       favOnly: $('#f-fav').classList.contains('on'),
-      epgOnly: $('#f-epg').classList.contains('on')
+      epgOnly: $('#f-epg').classList.contains('on'),
+      hideDead: $('#f-dead').classList.contains('on')
     })
     applyFilters()
   }
 
   fc.onchange = rerun
   fk.onchange = rerun
-  $('#f-fav').onclick = e => {
-    e.currentTarget.classList.toggle('on')
-    rerun()
-  }
-  $('#f-epg').onclick = e => {
-    e.currentTarget.classList.toggle('on')
-    rerun()
+  for (const id of ['#f-fav', '#f-epg', '#f-dead']) {
+    $(id).onclick = e => {
+      e.currentTarget.classList.toggle('on')
+      rerun()
+    }
   }
 
   let deb
@@ -231,6 +237,7 @@ function applyFilters() {
   const cat = $('#f-category').value
   const favOnly = $('#f-fav').classList.contains('on')
   const epgOnly = $('#f-epg').classList.contains('on')
+  const hideDead = $('#f-dead').classList.contains('on')
   const scopeAll = state.settings.scope === 'all'
   const hideNsfw = state.settings.hideNsfw !== false
 
@@ -241,6 +248,9 @@ function applyFilters() {
     if (cat && !c.categories.includes(cat)) return false
     if (favOnly && !state.favorites.has(c.id)) return false
     if (epgOnly && !hasEpg(c.id)) return false
+    // A favourite is an explicit "I want this" — never hide it out from under
+    // the user, even if it has only ever failed.
+    if (hideDead && state.dead.has(c.id) && !state.favorites.has(c.id)) return false
     if (q && !matchesName(c, q) && !state.progHits.has(c.id)) return false
     return true
   })
@@ -571,6 +581,29 @@ function pollEpg() {
 const video = $('#video')
 let hls = null
 let failover = []
+// Only a chain that started from picking the channel proves anything about the
+// *channel*: picking one source by hand clears the failover list, so its failure
+// says nothing about the sources we never tried.
+let autoChain = false
+
+// Report what playback actually did, so the "Hide dead" filter has something to
+// go on. The rules that decide what counts live in the main process (health.js);
+// this only reports observations. `told` keeps a channel from re-posting the same
+// news on every onplaying — the reply carries the updated dead set.
+const told = new Set()
+async function reportHealth(id, kind) {
+  if (!id || told.has(`${kind}:${id}`)) return
+  told.add(`${kind}:${id}`)
+  try {
+    const r = await fetch(`/api/health/${kind}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id })
+    })
+    state.dead = new Set((await r.json()).dead || [])
+    if ($('#f-dead').classList.contains('on')) applyFilters()
+  } catch {}
+}
 
 function select(channel, { autoplay = true } = {}) {
   state.playing = channel
@@ -595,6 +628,7 @@ function select(channel, { autoplay = true } = {}) {
   picker.onchange = () => {
     const s = channel.streams.find(x => x.sid === picker.value)
     failover = []
+    autoChain = false
     if (s) play(s)
   }
 
@@ -605,6 +639,7 @@ function select(channel, { autoplay = true } = {}) {
 
   if (autoplay) {
     failover = channel.streams.slice(1)
+    autoChain = true
     play(channel.streams[0])
   }
 }
@@ -701,7 +736,9 @@ function play(stream) {
   clearTimeout(stallTimer)
   clearInterval(watchdog)
   const token = ++playToken // ignore callbacks from a stream we've moved on from
+  const channel = state.playing // who this attempt is *about*, for health reporting
   video.volume = state.settings.volume ?? 1
+  video.muted = !!state.settings.muted
 
   const onFail = reason => {
     if (token !== playToken) return
@@ -716,6 +753,10 @@ function play(stream) {
       play(next)
       return
     }
+    // Every source tried, none played. Only meaningful if we got here by working
+    // down the channel's own list — a hand-picked source failing says nothing
+    // about the ones it skipped.
+    if (autoChain) reportHealth(channel?.id, 'fail')
     err.textContent = `Could not play this channel (${reason}). About 1 in 4 iptv-org streams are geo-blocked or only broadcast part-time — try another channel.`
     err.classList.remove('hidden')
   }
@@ -751,6 +792,7 @@ function play(stream) {
     clearTimeout(stallTimer)
     $('#player-spinner').classList.add('hidden')
     err.classList.add('hidden')
+    reportHealth(channel?.id, 'ok') // whichever source got here, the channel works
     setStatus(`Playing ${state.playing?.name || ''}`)
     // Arm (or re-arm, after a recovery) the in-playback stall watchdog.
     progressTime = video.currentTime
@@ -837,7 +879,50 @@ const goFullscreen = () => {
   else target.requestFullscreen?.()
 }
 
-video.addEventListener('volumechange', () => saveSettings({ volume: video.volume }))
+/* ────────────────────────── volume ────────────────────────── */
+
+const volSlider = $('#vol')
+const btnMute = $('#btn-mute')
+
+const volIcon = (v, muted) => (muted || !v ? '🔇' : v < 0.34 ? '🔈' : v < 0.67 ? '🔉' : '🔊')
+
+// The slider shows the *user's* volume. During a sleep fade the element's volume
+// is being driven down by the timer and the slider deliberately doesn't follow —
+// cancelling puts the sound back exactly where the slider still says it is.
+function renderVolume() {
+  const pct = Math.round((video.muted ? 0 : video.volume) * 100)
+  volSlider.value = pct
+  volSlider.style.setProperty('--pct', `${pct}%`)
+  $('#vol-pct').textContent = `${pct}%`
+  btnMute.textContent = volIcon(video.volume, video.muted)
+  btnMute.title = video.muted ? 'Unmute (M)' : 'Mute (M)'
+}
+
+function setVolume(v) {
+  video.muted = false // dragging the slider up is an unmute
+  video.volume = Math.min(1, Math.max(0, v))
+  renderVolume() // an identical value fires no volumechange; keep the UI honest
+}
+
+const nudgeVolume = d => setVolume((video.muted ? 0 : video.volume) + d)
+
+volSlider.oninput = () => setVolume(volSlider.value / 100)
+btnMute.onclick = () => {
+  video.muted = !video.muted
+  renderVolume()
+}
+
+// Mid-fade the element's volume belongs to the sleep timer, not the user. Saving
+// it anyway is what left this app booting at 0.83%: the fade fires ~40 volumechange
+// events, each an independent un-ordered POST, and a straggler landed *after*
+// cancelSleep's restore and won. sleep.volume is non-null only during a fade, and
+// volumechange is queued as a task, so cancelSleep's own restore has already
+// cleared it by the time this runs — the real volume still gets saved.
+video.addEventListener('volumechange', () => {
+  if (sleep.volume !== null) return
+  renderVolume()
+  saveSettings({ volume: video.volume, muted: video.muted })
+})
 video.addEventListener('dblclick', goFullscreen)
 // if frames are advancing, whatever we warned about is over — don't leave a
 // stale error banner sitting on top of good video
@@ -1109,6 +1194,18 @@ async function openSettings() {
     applyFilters()
   }
 
+  const n = state.dead.size
+  $('#health-count').textContent = n
+    ? `${n} channel${n > 1 ? 's' : ''} currently counted dead.`
+    : 'Nothing is counted dead yet.'
+  $('#btn-reset-health').onclick = async () => {
+    await fetch('/api/health/reset', { method: 'POST' })
+    state.dead = new Set()
+    told.clear() // a fresh slate means this session's verdicts get to land again
+    $('#health-count').textContent = 'Nothing is counted dead yet.'
+    applyFilters()
+  }
+
   $('#btn-refresh-epg').onclick = async () => {
     $('#btn-refresh-epg').disabled = true
     setProgress('Starting refresh…', null, true) // don't wait 5s for the first poll
@@ -1192,6 +1289,11 @@ document.addEventListener('keydown', e => {
   if (e.key === 'f' && state.playing) goFullscreen()
   if (e.key === 't' && state.playing) toggleTheater()
   if (e.key === 's' && state.playing) $('#btn-sleep').click()
+  if (e.key === 'm') btnMute.click()
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+    e.preventDefault() // otherwise the guide scrolls under the volume change
+    nudgeVolume(e.key === 'ArrowUp' ? 0.05 : -0.05)
+  }
   if (e.key === ' ' && state.playing) {
     e.preventDefault()
     video.paused ? video.play().catch(() => {}) : video.pause()

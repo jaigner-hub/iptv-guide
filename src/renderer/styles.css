@@ -144,7 +144,32 @@ body.resizing #video { pointer-events: none; }
 }
 .np-now .none { color: var(--fg-dim); font-style: italic; }
 
-.player-controls { flex: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.player-controls { flex: none; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+/* Volume. The app shipped with no volume control of any kind, so when a bad value
+   got persisted (see the volumechange listener in app.js) it was silent with no
+   way to fix it from the UI. --pct is set by renderVolume so the filled part of
+   the track tracks the value. */
+.vol { display: flex; align-items: center; gap: 6px; flex: 1 0 160px; min-width: 140px; }
+.vol-slider {
+  flex: 1; min-width: 54px; height: 4px; padding: 0;
+  -webkit-appearance: none; appearance: none;
+  background: linear-gradient(to right,
+    var(--accent) 0 var(--pct, 100%), var(--line) var(--pct, 100%) 100%);
+  border-radius: 3px; cursor: pointer; outline: none;
+}
+.vol-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--fg); border: 0; cursor: pointer;
+}
+.vol-slider:hover::-webkit-slider-thumb,
+.vol-slider:focus-visible::-webkit-slider-thumb { background: var(--accent); }
+.vol-pct {
+  color: var(--fg-dim); font-size: 11px;
+  min-width: 30px; text-align: right; font-variant-numeric: tabular-nums;
+}
+#btn-mute { padding: 6px 8px; line-height: 1; flex: none; }
 
 .player-error {
   position: absolute; inset: auto 0 0 0;
@@ -162,8 +187,14 @@ body.resizing #video { pointer-events: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ── toolbar ─────────────────────────────────────────────────── */
+/* The row has to stay usable down to the window's 900px minimum. It didn't: the
+   controls are fixed-width and never shrank, so ⚙ — the only way to reach scope,
+   NSFW and scraping — sat off the right edge below ~960px, unreachable. The
+   search box and the two selects now give up width first, and wrap is the
+   backstop: a control may end up on a second line, never off-screen. */
 .toolbar {
   display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;
   padding: 8px 12px;
   background: var(--bg-2);
   border-bottom: 1px solid var(--line);
@@ -177,7 +208,8 @@ body.resizing #video { pointer-events: none; }
 .spacer { flex: 1; }
 
 .search {
-  width: 240px; padding: 7px 10px;
+  flex: 0 1 240px; width: 240px; min-width: 110px;
+  padding: 7px 10px;
   background: var(--bg-3); color: var(--fg);
   border: 1px solid var(--line); border-radius: 7px; outline: none;
 }
@@ -190,6 +222,10 @@ body.resizing #video { pointer-events: none; }
   cursor: pointer; font: inherit; font-size: 13px;
 }
 .chip:hover, .select:hover { border-color: var(--accent); }
+/* min-width:auto would floor a select at its widest option ("United Kingdom of
+   Great Britain…"), which is most of the overflow. Scoped to the toolbar so the
+   player's stream picker is untouched. */
+.toolbar .select { flex: 0 1 auto; min-width: 90px; }
 .chip.toggle.on { background: var(--accent); border-color: var(--accent); color: #04101f; font-weight: 600; }
 .chip.select { padding: 6px 8px; }
 
