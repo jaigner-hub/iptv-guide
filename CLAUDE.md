@@ -44,7 +44,15 @@ cmd.exe /c "npx electron scripts/boottest.js"     # cold start; --offline assert
 cmd.exe /c "npx electron scripts/stalltest.js"    # a dead stream must fail over, not hang
 cmd.exe /c "npx electron scripts/midstalltest.js" # a stream that dies MID-play must recover/fail over (needs ffmpeg)
 cmd.exe /c "npx electron scripts/healthtest.js"  # an all-dead channel is recorded, then hidden by "Hide dead"
+cmd.exe /c "npx electron scripts/scrapetest.js"  # on-demand scraper fills a channel mjh+epgshare miss (needs a catalog cache)
 ```
+
+`scrapetest` runs under Electron *on purpose*: the scraper drives the ESM `epg-grabber`
+engine, and the way its config is loaded fails only on Windows (a Windows absolute path is
+not a `file://` URL, and app.asar is unreadable by import()). Under WSL Node every site
+"works", so a Linux-only run of this would prove nothing. `scraper.js` loads the config with
+`require()` and drives the engine in-process for exactly this reason — don't reintroduce the
+`epg-grabber` CLI.
 
 An Electron test that throws inside `app.whenReady().then(...)` does **not** fail — the rejection
 is unhandled, the app never exits, and you get an empty log that looks exactly like a slow test.

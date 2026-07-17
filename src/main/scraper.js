@@ -2,15 +2,21 @@
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
 const path = require('node:path')
-const { spawn } = require('node:child_process')
+const { pathToFileURL } = require('node:url')
+const dayjs = require('dayjs')
+dayjs.extend(require('dayjs/plugin/utc'))
 
 /**
  * Drives iptv-org's `epg-grabber` engine against vendored site configs.
  *
  * Two things make this cheap where a naive "bundle the scraper repo" is not:
  *
- *  - We skip iptv-org/epg's TypeScript CLI entirely and call the `epg-grabber`
- *    npm package, whose deps are pure JS. No tsx, no @swc, no native binaries.
+ *  - We skip iptv-org/epg's TypeScript CLI entirely and drive the `epg-grabber`
+ *    engine in-process, whose deps are pure JS. No tsx, no @swc, no native
+ *    binaries — and no child process. The `epg-grabber` *CLI* loads its config
+ *    with import(), which cannot read a Windows absolute path (it needs a
+ *    file:// URL) nor an app.asar path at all; require()-ing the config in-
+ *    process sidesteps both, so this actually runs on the platform we ship.
  *  - We *generate* the channels.xml, containing only the channels the user is
  *    actually missing a guide for. A full-site scrape is hours; 60 favourites
  *    is seconds. And because we choose `xmltv_id`, the scraped output keys
@@ -21,9 +27,10 @@ const { spawn } = require('node:child_process')
  * not something that belongs in an installer.
  */
 /**
- * Node's ESM loader cannot read from inside an app.asar archive, and epg-grabber
- * is ESM. Anything handed to the child process must therefore point at the
- * unpacked copy. Harmless in dev, where no asar path exists.
+ * asarUnpack keeps vendor/** and node_modules/** as real files beside the
+ * archive, so a path that resolves *into* app.asar won't find them there.
+ * Redirect to the unpacked copy for anything we readdir or require off disk.
+ * Identity in dev, where there is no asar.
  */
 const unpacked = p => {
   if (!p.includes('app.asar')) return p
@@ -125,47 +132,63 @@ class Scraper {
         .join('\n') +
       '\n</channels>\n'
 
-    const chFile = path.join(this.workDir, `${site}.channels.xml`)
     const outFile = path.join(this.workDir, `${site}.guide.xml`)
-    await fsp.writeFile(chFile, xml, 'utf8')
 
-    const bin = this._grabberBin()
-    const args = [
-      bin,
-      `--config=${configPath}`,
-      `--channels=${chFile}`,
-      `--output=${outFile}`,
-      `--days=${days}`,
-      '--delay=250',
-      '--max-connections=5',
-      '--timeout=15000'
-    ]
+    // epg-grabber is itself ESM (Electron's Node can't require() it), so import
+    // it. The *config*, by contrast, is CommonJS and is loaded with require() —
+    // which reads both Windows absolute paths and app.asar, where epg-grabber's
+    // own import()-based config loader reads neither. delete-from-cache lets a
+    // second run pick up an edited config.
+    const { EPGGrabber } = await this._loadGrabber()
+    delete require.cache[require.resolve(configPath)]
+    const config = require(configPath)
+    if (config.request && typeof config.request === 'object') {
+      config.request = { timeout: 15000, ...config.request }
+    }
 
+    const channels = EPGGrabber.parseChannelsXML(xml)
+    const grabber = new EPGGrabber(config)
+
+    // grab one UTC day at a time, mirroring the CLI: [today, +1, … +days-1].
+    const base = dayjs.utc().startOf('day')
+    const dates = Array.from({ length: days }, (_, i) => base.add(i, 'day'))
+    const queue = []
+    for (const ch of channels) for (const date of dates) queue.push({ ch, date })
+
+    const programmes = []
+    let done = 0
+    const total = queue.length
+    this._cancelled = false
     this._log(`${site}: grabbing ${days} day(s)…`)
 
-    await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, args, {
-        cwd: this.workDir,
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
-        stdio: ['ignore', 'pipe', 'pipe']
-      })
-      this._child = child
-
-      const onLine = buf => {
-        for (const line of String(buf).split(/\r?\n/)) {
-          const t = line.trim()
-          if (t) this._log(t.slice(0, 200))
-        }
+    // a small pool keeps it polite; epg-grabber resolves grab() with [] and
+    // reports the failure through the callback rather than throwing.
+    const worker = async () => {
+      for (;;) {
+        if (this._cancelled) return
+        const item = queue.shift()
+        if (!item) return
+        const rows = await grabber
+          .grab(item.ch, item.date, (ctx, err) => {
+            done++
+            this._log(
+              `[${done}/${total}] ${item.ch.site} ${item.ch.xmltv_id} ` +
+                `${item.date.format('MMM D')} — ${ctx.programs.length} programs`
+            )
+            if (err) this._log(`  ${err.message}`)
+          })
+          .catch(err => {
+            this._log(`  ${item.ch.xmltv_id}: ${err.message}`)
+            return []
+          })
+        programmes.push(...rows)
       }
-      child.stdout.on('data', onLine)
-      child.stderr.on('data', onLine)
-      child.on('error', reject)
-      child.on('close', code =>
-        code === 0 ? resolve() : reject(new Error(`epg-grabber exited with code ${code}`))
-      )
-    })
+    }
+    await Promise.all(Array.from({ length: 5 }, worker))
+    if (this._cancelled) throw new Error('scrape cancelled')
 
-    if (!fs.existsSync(outFile)) throw new Error('grabber produced no output')
+    const xmltv = EPGGrabber.generateXMLTV(channels, programmes, { date: base.format('YYYYMMDD') })
+    await fsp.writeFile(outFile, xmltv, 'utf8')
 
     // xmltv_id === our channel id, so the map is the identity over picked channels.
     const idMap = new Map([...wanted].map(id => [id, id]))
@@ -178,24 +201,29 @@ class Scraper {
   }
 
   cancel() {
-    if (this._child) this._child.kill()
+    // in-flight grab() calls finish, but the worker loop stops pulling new work
+    this._cancelled = true
     this.state.running = false
   }
 
-  _grabberBin() {
-    // epg-grabber declares an "exports" map, so require.resolve() can't reach its
-    // package.json. Walk node_modules roots and read the manifest off disk instead.
-    const roots = [
-      path.join(__dirname, '..', '..', 'node_modules'),
-      ...(module.paths || [])
-    ]
+  /**
+   * Import the ESM epg-grabber engine from its *unpacked* entry. A bare
+   * `import('epg-grabber')` from inside app.asar resolves to a path the ESM
+   * loader can't read; walking node_modules for the manifest and importing its
+   * exports entry through a file:// URL points at the real file on disk.
+   */
+  async _loadGrabber() {
+    const roots = [path.join(__dirname, '..', '..', 'node_modules'), ...(module.paths || [])]
     for (const root of roots) {
       const dir = unpacked(path.join(root, 'epg-grabber'))
       const manifest = path.join(dir, 'package.json')
       if (!fs.existsSync(manifest)) continue
       const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'))
-      const rel = typeof pkg.bin === 'string' ? pkg.bin : Object.values(pkg.bin || {})[0]
-      if (rel) return path.join(dir, rel)
+      const dot = pkg.exports && pkg.exports['.']
+      const rel = (dot && (dot.import || dot.default)) || pkg.module || pkg.main
+      if (!rel) continue
+      const entry = unpacked(path.join(dir, rel))
+      return import(pathToFileURL(entry).href)
     }
     throw new Error('epg-grabber not found — reinstall dependencies')
   }
